@@ -1,141 +1,163 @@
-def extract_problem(page):
+"""Conservative extraction of the current coding question and editor language."""
+from __future__ import annotations
 
-    # ========================================
-    # TRY TO GET JUST THE PROBLEM DESCRIPTION
-    # ========================================
+import re
+from pathlib import PurePath
 
+from core.waits import wait_for_question_detail
+
+PROBLEM_SELECTORS = (
+    "[data-testid='problem-description']",
+    "[data-testid*='problem-statement']",
+    ".problem-description",
+    ".problem-statement",
+    ".question-content",
+    ".coding-question",
+)
+
+
+def extract_problem(page, minimum_length: int = 40) -> str | None:
+    """Wait for the detail page to settle, then return its statement text."""
     try:
+        wait_for_question_detail(page, timeout_ms=20000, stable_ms=150)
+    except Exception as exc:
+        print(f"[EXTRACT] Question content/editor did not become ready: {str(exc)[:180]}")
+        return None
 
-        # Try common problem description selectors
-        selectors = [
-            ".problem-description",
-            ".question-content",
-            ".problem-statement",
-            ".coding-question",
-            "[class*='problem']",
-            "[class*='question']",
-            "[class*='description']",
-        ]
+    for selector in PROBLEM_SELECTORS:
+        try:
+            locator = page.locator(selector).first
+            if locator.count() and locator.is_visible():
+                text = locator.inner_text(timeout=3000).strip()
+                if len(text) >= minimum_length:
+                    return text[:16000]
+        except Exception:
+            continue
 
-        for selector in selectors:
+    # Fallback removes the editor and page controls before reading the statement.
+    try:
+        text = page.evaluate(
+            """() => {
+                const clone = document.body.cloneNode(true);
+                clone.querySelectorAll(
+                    'nav, header, footer, aside, button, form, input, textarea, ' +
+                    'select, .monaco-editor, .ace_editor, .commonCodeEditor, ' +
+                    '[contenteditable="true"], [role="navigation"], [role="button"]'
+                ).forEach(node => node.remove());
+                return (clone.innerText || clone.textContent || '').trim();
+            }"""
+        )
+        text = (text or "").strip()
+        if len(text) >= minimum_length:
+            return text[:16000]
+    except Exception:
+        pass
+    return None
 
-            try:
 
-                el = page.locator(selector).first
+def normalize_language(raw_language: str | None) -> str:
+    """Normalize common language labels, Ace modes, and filenames."""
+    if not raw_language:
+        return "unknown"
 
-                if el.is_visible(timeout=2000):
+    raw = str(raw_language).strip().lower()
+    raw = raw.rsplit("/", 1)[-1]
+    raw = raw.removeprefix("mode-").removeprefix("mode_")
+    basename = raw.replace("\\", "/").rsplit("/", 1)[-1]
+    suffix = PurePath(basename).suffix
 
-                    text = el.inner_text().strip()
+    extension_map = {
+        ".py": "python",
+        ".js": "javascript",
+        ".mjs": "javascript",
+        ".cjs": "javascript",
+        ".java": "java",
+        ".cpp": "c++",
+        ".cc": "c++",
+        ".cxx": "c++",
+        ".c": "c",
+        ".html": "html",
+        ".htm": "html",
+        ".css": "css",
+        ".sql": "sql",
+    }
+    if suffix in extension_map:
+        return extension_map[suffix]
 
-                    if len(text) > 50:
-                        return text[:12000]
+    compact = re.sub(r"[^a-z0-9+#]", "", raw)
+    aliases = {
+        "py": "python",
+        "python": "python",
+        "python3": "python",
+        "javascript": "javascript",
+        "js": "javascript",
+        "nodejs": "javascript",
+        "jsx": "javascript",
+        "typescript": "javascript",
+        "ts": "javascript",
+        "java": "java",
+        "cpp": "c++",
+        "c++": "c++",
+        "cc": "c++",
+        "cxx": "c++",
+        "c_cpp": "c++",
+        "ccpp": "c++",
+        "c": "c",
+        "c99": "c",
+        "c11": "c",
+        "c17": "c",
+        "c23": "c",
+        "sql": "sql",
+        "html": "html",
+        "css": "css",
+    }
+    return aliases.get(compact, "unknown")
 
-            except:
-                continue
 
-    except:
+def detect_language(page) -> str:
+    """Detect language from the real coding editor, not the question's sample code."""
+    try:
+        result = page.evaluate(
+            """() => {
+                const aceRoot = document.querySelector('#codingQuestionEditor') ||
+                    document.querySelector('.commonCodeEditor .ace_editor:not(.ace_autocomplete)');
+                try {
+                    if (aceRoot && window.ace) {
+                        const editor = window.ace.edit(aceRoot);
+                        const mode = editor && editor.session &&
+                            editor.session.getMode() && editor.session.getMode().$id;
+                        if (mode) return mode;
+                    }
+                } catch (e) {}
+
+                const monoRoot = document.querySelector(
+                    '.commonCodeEditor .monaco-editor, #codingQuestionEditor.monaco-editor'
+                ) || document.querySelector('[data-testid="code-editor"] .monaco-editor');
+                try {
+                    if (monoRoot && window.monaco && monaco.editor) {
+                        const editor = monaco.editor.getEditors().find(candidate => {
+                            const node = candidate.getDomNode();
+                            return node === monoRoot || monoRoot.contains(node);
+                        });
+                        const model = editor && editor.getModel();
+                        if (model) return model.getLanguageId();
+                    }
+                } catch (e) {}
+
+                const select = document.querySelector(
+                    'select[class*="language"], select[id*="language"]'
+                );
+                if (select && select.selectedIndex >= 0) {
+                    const option = select.options[select.selectedIndex];
+                    return option.value || option.text;
+                }
+                return null;
+            }"""
+        )
+        language = normalize_language(result)
+        if language != "unknown":
+            return language
+    except Exception:
         pass
 
-    # ========================================
-    # FALLBACK: GET FULL PAGE TEXT
-    # ========================================
-
-    text = page.locator("body").inner_text()
-
-    return text[:12000]
-
-
-def normalize_language(lang):
-    if not lang:
-        return "python"
-    lang = lang.lower().strip()
-    if "python" in lang or lang == "py":
-        return "python"
-    elif "javascript" in lang or lang == "js":
-        return "javascript"
-    elif "java" in lang:
-        return "java"
-    elif "cpp" in lang or "c++" in lang:
-        return "c++"
-    elif "c" in lang:
-        return "c"
-    elif "sql" in lang:
-        return "sql"
-    elif "html" in lang:
-        return "html"
-    elif "css" in lang:
-        return "css"
-    return lang
-
-
-def detect_language(page):
-    """
-    Detects the programming language of the current question.
-    Checks Monaco editor model language, active file tabs, or page text.
-    """
-    try:
-        # 1. Check via Monaco Editor API
-        lang = page.evaluate("""() => {
-            if (typeof monaco !== 'undefined') {
-                const editors = monaco.editor.getEditors();
-                if (editors && editors.length > 0) {
-                    return editors[0].getModel().getLanguageId();
-                }
-            }
-            // Check select language dropdown
-            const select = document.querySelector('select[class*="language"], select[id*="language"], [class*="select"] select');
-            if (select) {
-                return select.options[select.selectedIndex].value || select.options[select.selectedIndex].text;
-            }
-            return null;
-        }""")
-        if lang:
-            detected = normalize_language(lang)
-            print(f"    [LANG] Detected via Monaco/Select: {detected} (raw: {lang})")
-            return detected
-    except Exception as e:
-        print(f"    [LANG] Monaco/Select detection failed: {e}")
-
-    # 2. Check active tabs/filenames in the editor
-    try:
-        filename = page.evaluate("""() => {
-            const activeTab = document.querySelector('.active-tab, .tab.active, [class*="tab"][class*="active"]');
-            if (activeTab) return activeTab.innerText || activeTab.textContent;
-            
-            // Try any tab element
-            const tabs = document.querySelectorAll('[class*="tab"]');
-            for (const tab of tabs) {
-                if (tab.className.includes('active') || tab.getAttribute('aria-selected') === 'true') {
-                    return tab.innerText || tab.textContent;
-                }
-            }
-            return null;
-        }""")
-        if filename:
-            filename = filename.lower().strip()
-            detected = None
-            if filename.endswith(".py"):
-                detected = "python"
-            elif filename.endswith(".js"):
-                detected = "javascript"
-            elif filename.endswith(".java"):
-                detected = "java"
-            elif filename.endswith(".cpp") or filename.endswith(".c"):
-                detected = "cpp"
-            elif filename.endswith(".html"):
-                detected = "html"
-            elif filename.endswith(".css"):
-                detected = "css"
-            elif filename.endswith(".sql"):
-                detected = "sql"
-            
-            if detected:
-                normalized = normalize_language(detected)
-                print(f"    [LANG] Detected via Tab: {normalized} (filename: {filename})")
-                return normalized
-    except Exception as e:
-        print(f"    [LANG] Tab filename detection failed: {e}")
-
-    # Default to python
-    print("    [LANG] Could not detect language, defaulting to python")
-    return "python"
+    return "unknown"

@@ -1,0 +1,35 @@
+# Local secrets and credentials
+.env
+.env.*
+!.env.example
+auth.json
+
+# Local browser sessions and caches
+user_data/
+playwright_profile/
+automation_chrome_profile/
+
+# Python environments and caches
+venv/
+.venv/
+__pycache__/
+**/__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+
+# Local state and generated study drafts
+progress.json
+drafts/
+
+# Debug artifacts
+debug_*.png
+debug_screenshot.png
+debug_page_text.txt
+
+# API/session diagnostics and exports
+*.har
+ccbp-session.json
+ccbp-token.txt
+token.txt
+ids/

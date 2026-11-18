@@ -1,92 +1,33 @@
-from playwright.sync_api import sync_playwright
+"""Inspect Question Bank rows, filters, and editor selectors after sign-in."""
+from core.auth import ensure_authenticated
+from core.browser import LMS_URL, start_browser
+from core.extractor import detect_language, extract_problem
+from core.filters import apply_unsolved_filters
+from core.navigator import get_unsolved_questions, open_question_bank
 
-with sync_playwright() as p:
 
-    # LAUNCH STABLE BROWSER
-    browser = p.chromium.launch_persistent_context(
-        user_data_dir="./playwright_profile",
-        headless=False,
-        channel="chrome",
-        args=[
-            "--disable-dev-shm-usage",
-            "--disable-blink-features=AutomationControlled"
-        ]
-    )
+def main() -> None:
+    playwright, context, page = start_browser()
+    try:
+        page.goto(LMS_URL, timeout=120000, wait_until="domcontentloaded")
+        ensure_authenticated(page)
+        open_question_bank(page)
+        apply_unsolved_filters(page)
+        questions = get_unsolved_questions(page)
+        print(f"Visible unsolved questions: {len(questions)}")
+        for item in questions[:20]:
+            print("-", item["title"])
+        if questions:
+            input("Press Enter to inspect the first question...")
+            from core.navigator import open_question
+            if open_question(page, questions[0]):
+                print("Language:", detect_language(page))
+                print("Problem:", (extract_problem(page) or "NOT FOUND")[:4000])
+        input("Press Enter to close...")
+    finally:
+        context.close()
+        playwright.stop()
 
-    page = browser.new_page()
 
-    # OPEN PORTAL
-    page.goto("https://learning.ccbp.in/")
-
-    page.wait_for_load_state("networkidle")
-
-    print("Portal opened")
-
-    # OPEN QUESTION BANK
-    page.get_by_text("Question Bank").first.click()
-
-    page.wait_for_timeout(5000)
-
-    print("Question bank opened")
-
-    # APPLY FILTERS
-    in_progress = page.get_by_text("In Progress").first
-
-    in_progress.wait_for(timeout=10000)
-    in_progress.click()
-
-    print("Clicked In Progress")
-
-    page.wait_for_timeout(3000)
-
-    not_attempted = page.get_by_text("Not Attempted").first
-
-    not_attempted.wait_for(timeout=10000)
-    not_attempted.click()
-
-    print("Clicked Not Attempted")
-
-    page.wait_for_timeout(5000)
-
-    print("\n=== FINDING UNSOLVED QUESTION ===\n")
-
-    # TARGET FIRST UNSOLVED QUESTION
-    question = page.get_by_text("Greatest Among N Numbers").first
-
-    # WAIT FOR QUESTION
-    question.wait_for(timeout=10000)
-
-    # SCROLL INTO VIEW
-    question.scroll_into_view_if_needed()
-
-    page.wait_for_timeout(1000)
-
-    # HIGHLIGHT FOR DEBUGGING
-    question.highlight()
-
-    page.wait_for_timeout(1000)
-
-    print("Clicking question...")
-
-    # STABLE CLICK
-    question.click(force=True)
-
-    print("Question opened!")
-
-    # WAIT FOR QUESTION PAGE
-    page.wait_for_load_state("domcontentloaded")
-
-    page.wait_for_timeout(5000)
-
-    print("Page stabilized")
-
-    # EXTRACT PAGE TEXT
-    problem_text = page.locator("body").inner_text()
-
-    print("\n=== PROBLEM TEXT ===\n")
-
-    print(problem_text[:5000])
-
-    input("\nPress Enter to close...")
-
-    browser.close()
+if __name__ == "__main__":
+    main()
